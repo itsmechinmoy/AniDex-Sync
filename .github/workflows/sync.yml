@@ -1,0 +1,33 @@
+name: MangaDex Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Runs once a day at midnight UTC
+  workflow_dispatch:  # Allows you to trigger the workflow manually
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run MangaDex Sync
+        env:
+          MANGADEX_USERNAME: ${{ secrets.MANGADEX_USERNAME }}
+          MANGADEX_PASSWORD: ${{ secrets.MANGADEX_PASSWORD }}
+          MANGADEX_CLIENT_ID: ${{ secrets.MANGADEX_CLIENT_ID }}
+          MANGADEX_CLIENT_SECRET: ${{ secrets.MANGADEX_CLIENT_SECRET }}
+          ANILIST_USERNAME: ${{ secrets.ANILIST_USERNAME }}
+        run: |
+          python ./main.py
