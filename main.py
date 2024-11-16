@@ -232,9 +232,11 @@ class MangaDexSync:
                 print(Fore.RED + f"Error processing {primary_title}: {e}")
                 failed_manga.append(primary_title)
 
+        failed_count = len(failed_manga)
         print(Fore.YELLOW + f"\n--- Synchronization complete ---")
         print(Fore.GREEN + f"Successfully synced: {synced_manga}/{total_manga}")
         print(Fore.BLUE + f"Already in list (skipped): {skipped_manga}")
+        print(Fore.RED + f"Failed to sync: {failed_count}")
         if failed_manga:
             print(Fore.RED + "\nManga that failed to sync:")
             for manga in failed_manga:
