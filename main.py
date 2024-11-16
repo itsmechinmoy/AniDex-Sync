@@ -245,4 +245,4 @@ class MangaDexSync:
 
 if __name__ == '__main__':
     manga_sync = MangaDexSync()
-    manga_sync.sync_manga_list(anilist_username="your_anilist_username")
+    manga_sync.sync_manga_list(anilist_username="itsmechinmoy")
