@@ -4,6 +4,7 @@ from colorama import Fore, init
 import sys
 import time
 import os
+import concurrent.futures
 
 init(autoreset=True)
 
@@ -58,6 +59,7 @@ class MangaDexSync:
                         if title:
                             self.mangadex_manga_cache[title.lower()] = manga_id
                             
+
             offset += limit
             if len(data) < limit:
                 break
@@ -201,62 +203,46 @@ class MangaDexSync:
         skipped_manga = 0
         failed_manga = []
 
-        for index, manga in enumerate(anilist_manga, 1):
-            titles = manga['media']['title']
-            primary_title = titles.get('english') or titles.get('romaji') or titles.get('native')
-            print(Fore.YELLOW + f"Processing manga {index}/{total_manga}: {primary_title}")
-            
-            try:
-                mangadex_id = self.find_mangadex_manga(titles)
-                if not mangadex_id:
-                    print(Fore.RED + f"Could not find manga on MangaDex: {primary_title}")
-                    if titles.get('romaji'):
-                        print(Fore.RED + f"(Romaji title tried: {titles['romaji']})")
-                    failed_manga.append(primary_title)
-                    continue
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
 
-                if mangadex_id in current_mangadex_ids:
-                    print(Fore.BLUE + f"Skipping already followed manga: {primary_title}")
-                    skipped_manga += 1
-                    continue
+            for index, manga in enumerate(anilist_manga, 1):
+                titles = manga['media']['title']
+                primary_title = titles.get('english') or titles.get('romaji') or titles.get('native')
+                print(Fore.YELLOW + f"Processing manga {index}/{total_manga}: {primary_title}")
 
-                if self.update_mangadex_reading_status(mangadex_id, manga['status']):
-                    synced_manga += 1
-                    print(Fore.GREEN + f"Synced: {primary_title}")
-                else:
-                    failed_manga.append(primary_title)
-                    
-                time.sleep(0.5)
-                
-            except Exception as e:
-                print(Fore.RED + f"Error processing {primary_title}: {e}")
-                failed_manga.append(primary_title)
+                futures.append(executor.submit(self.process_manga, manga, primary_title, current_mangadex_ids, failed_manga, synced_manga, skipped_manga))
+
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
 
         failed_count = len(failed_manga)
         print(Fore.YELLOW + f"\n--- Synchronization complete ---")
         print(Fore.GREEN + f"Successfully synced: {synced_manga}/{total_manga}")
-        print(Fore.BLUE + f"Already in list (skipped): {skipped_manga}")
-        print(Fore.RED + f"Failed to sync: {failed_count}")
-        if failed_manga:
-            print(Fore.RED + "\nManga that failed to sync:")
-            for manga in failed_manga:
-                print(Fore.RED + f"- {manga}")
+        print(Fore.RED + f"Failed to sync: {failed_count}/{total_manga}")
+        if failed_count:
+            print(Fore.RED + f"Failed manga: {', '.join(failed_manga)}")
 
-def main():
-    print(Fore.YELLOW + "--- MangaDex Sync ---")
-    try:
-        syncer = MangaDexSync()
-        if not all([syncer.username, syncer.password, syncer.mangadex_client_id, syncer.mangadex_client_secret]):
-            print(Fore.RED + "Error: Required environment variables are missing")
-            sys.exit(1)
-        anilist_username = os.getenv('ANILIST_USERNAME')
-        if not anilist_username:
-            print(Fore.RED + "Error: ANILIST_USERNAME environment variable is missing")
-            sys.exit(1)
-        syncer.sync_manga_list(anilist_username)
-    except Exception as e:
-        print(Fore.RED + f"An error occurred: {str(e)}")
-        sys.exit(1)
+    def process_manga(self, manga: dict, primary_title: str, current_mangadex_ids: Set[str], failed_manga: list, synced_manga: int, skipped_manga: int):
+        manga_id = manga['media']['id']
+        status = manga['status']
+        progress = manga['progress']
+
+        if manga_id in current_mangadex_ids:
+            print(Fore.CYAN + f"{primary_title} is already synced, skipping.")
+            skipped_manga += 1
+        else:
+            print(Fore.GREEN + f"Syncing {primary_title}...")
+            mangadex_id = self.find_mangadex_manga(manga['media']['title'])
+            if mangadex_id:
+                print(Fore.GREEN + f"Found MangaDex ID for {primary_title}: {mangadex_id}")
+                if self.update_mangadex_reading_status(mangadex_id, status):
+                    synced_manga += 1
+                else:
+                    failed_manga.append(primary_title)
+            else:
+                failed_manga.append(primary_title)
 
 if __name__ == '__main__':
-    main()
+    manga_sync = MangaDexSync()
+    manga_sync.sync_manga_list(anilist_username="your_anilist_username")
