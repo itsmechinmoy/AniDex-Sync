@@ -4,6 +4,7 @@ from colorama import Fore, Style, init
 import getpass
 import sys
 import time
+import os
 
 init(autoreset=True)
 
@@ -209,7 +210,12 @@ def main():
         return
 
     try:
-        syncer = MangaDexSync(username, password, client_id, client_secret)
+        syncer = MangaDexSync()
+        syncer.username = username
+        syncer.password = password
+        syncer.mangadex_client_id = client_id
+        syncer.mangadex_client_secret = client_secret
+        
         anilist_username = input("Enter your AniList username: ").strip()
         if not anilist_username:
             print(Fore.RED + "Error: AniList username is required")
@@ -219,5 +225,5 @@ def main():
         print(Fore.RED + f"An error occurred: {str(e)}")
         sys.exit(1)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
