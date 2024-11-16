@@ -1,7 +1,6 @@
 import requests
-from typing import List
+from typing import List, Dict, Set
 from colorama import Fore, init
-import getpass
 import sys
 import time
 import os
@@ -19,6 +18,7 @@ class MangaDexSync:
         self.mangadex_client_secret = os.getenv('MANGADEX_CLIENT_SECRET')
         self.access_token = None
         self.refresh_token = None
+        self.mangadex_manga_cache: Dict[str, str] = {}  # title -> id mapping
 
     def _request(self, method: str, url: str, params: dict = None, data: dict = None, json: dict = None) -> requests.Response:
         if not self.access_token and not self.authenticate():
@@ -32,6 +32,40 @@ class MangaDexSync:
             response = requests.request(method, url, params=params, data=data, json=json, headers=headers)
 
         return response
+
+    def get_current_mangadex_list(self) -> Set[str]:
+        """Fetch current manga list from MangaDex"""
+        manga_ids = set()
+        limit = 100
+        offset = 0
+        
+        while True:
+            response = self._request('GET', f'{self.mangadex_base_url}/user/follows/manga', 
+                                  params={'limit': limit, 'offset': offset})
+            
+            if not response or response.status_code != 200:
+                break
+                
+            data = response.json().get('data', [])
+            if not data:
+                break
+                
+            for manga in data:
+                manga_id = manga.get('id')
+                titles = manga.get('attributes', {}).get('title', {})
+                if manga_id and titles:
+                    manga_ids.add(manga_id)
+                    # Cache the manga titles and IDs for later use
+                    for title in titles.values():
+                        if title:
+                            self.mangadex_manga_cache[title.lower()] = manga_id
+                            
+            offset += limit
+            if len(data) < limit:
+                break
+                
+        print(Fore.BLUE + f"Found {len(manga_ids)} manga in your MangaDex list")
+        return manga_ids
 
     def authenticate(self) -> bool:
         creds = {
@@ -78,6 +112,31 @@ class MangaDexSync:
         except Exception:
             return False
 
+    def find_mangadex_manga(self, anilist_title: str) -> str:
+        # First check the cache
+        title_lower = anilist_title.lower()
+        if title_lower in self.mangadex_manga_cache:
+            return self.mangadex_manga_cache[title_lower]
+
+        search_strategies = [
+            lambda title: title,
+            lambda title: title.lower(),
+            lambda title: title.replace(':', ''),
+            lambda title: title.split(':')[0].strip()
+        ]
+
+        for strategy in search_strategies:
+            modified_title = strategy(anilist_title)
+            params = {'title': modified_title, 'limit': 5}
+            response = self._request('GET', f'{self.mangadex_base_url}/manga', params=params)
+            if response and response.status_code == 200:
+                results = response.json().get('data', [])
+                if results:
+                    manga_id = results[0]['id']
+                    self.mangadex_manga_cache[title_lower] = manga_id
+                    return manga_id
+        return None
+
     def get_anilist_manga_list(self, username: str) -> List[dict]:
         query = '''
         query ($username: String) {
@@ -103,27 +162,6 @@ class MangaDexSync:
             return [entry for list_group in data['data']['MediaListCollection']['lists'] for entry in list_group['entries']]
         return []
 
-    def find_mangadex_manga(self, anilist_title: str) -> str:
-        search_strategies = [
-            lambda title: title,
-            lambda title: title.lower(),
-            lambda title: title.replace(':', ''),
-            lambda title: title.split(':')[0].strip()
-        ]
-
-        for strategy in search_strategies:
-            modified_title = strategy(anilist_title)
-            params = {'title': modified_title, 'limit': 5}
-            response = self._request('GET', f'{self.mangadex_base_url}/manga', params=params)
-            if response and response.status_code == 200:
-                results = response.json().get('data', [])
-                if results:
-                    for manga in results:
-                        titles = manga.get('attributes', {}).get('title', {})
-                        print(Fore.CYAN + f"Potential match found: {titles}")
-                    return results[0]['id']
-        return None
-
     def update_mangadex_reading_status(self, manga_id: str, status: str) -> bool:
         status_mapping = {
             'CURRENT': 'reading', 'COMPLETED': 'completed', 'PAUSED': 'on_hold', 
@@ -138,6 +176,10 @@ class MangaDexSync:
         return False
 
     def sync_manga_list(self, anilist_username: str):
+        print(Fore.YELLOW + "Fetching your current MangaDex list...")
+        current_mangadex_ids = self.get_current_mangadex_list()
+        
+        print(Fore.YELLOW + "Fetching your AniList manga...")
         anilist_manga = self.get_anilist_manga_list(anilist_username)
         if not anilist_manga:
             print(Fore.RED + "No AniList manga to sync")
@@ -145,26 +187,40 @@ class MangaDexSync:
 
         total_manga = len(anilist_manga)
         synced_manga = 0
+        skipped_manga = 0
         failed_manga = []
 
         for index, manga in enumerate(anilist_manga, 1):
             title = manga['media']['title'].get('english') or manga['media']['title'].get('romaji') or manga['media']['title'].get('native')
             print(Fore.YELLOW + f"Processing manga {index}/{total_manga}: {title}")
-            time.sleep(0.5)
-
+            
             try:
                 mangadex_id = self.find_mangadex_manga(title)
-                if mangadex_id and self.update_mangadex_reading_status(mangadex_id, manga['status']):
+                if not mangadex_id:
+                    print(Fore.RED + f"Could not find manga on MangaDex: {title}")
+                    failed_manga.append(title)
+                    continue
+
+                if mangadex_id in current_mangadex_ids:
+                    print(Fore.BLUE + f"Skipping already followed manga: {title}")
+                    skipped_manga += 1
+                    continue
+
+                if self.update_mangadex_reading_status(mangadex_id, manga['status']):
                     synced_manga += 1
                     print(Fore.GREEN + f"Synced: {title}")
                 else:
                     failed_manga.append(title)
+                    
+                time.sleep(0.5)  # Rate limiting
+                
             except Exception as e:
                 print(Fore.RED + f"Error processing {title}: {e}")
                 failed_manga.append(title)
 
         print(Fore.YELLOW + f"\n--- Synchronization complete ---")
         print(Fore.GREEN + f"Successfully synced: {synced_manga}/{total_manga}")
+        print(Fore.BLUE + f"Already in list (skipped): {skipped_manga}")
         if failed_manga:
             print(Fore.RED + "\nManga that failed to sync:")
             for manga in failed_manga:
