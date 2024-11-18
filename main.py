@@ -59,12 +59,11 @@ class MangaDexSync:
                         if title:
                             self.mangadex_manga_cache[title.lower()] = manga_id
                             
-
             offset += limit
             if len(data) < limit:
                 break
                 
-        print(Fore.BLUE + f"Found {len(manga_ids)} manga in your MangaDex list")
+        print(Fore.BLUE + f"Found {len(manga_ids)} existing manga in your MangaDex list")
         return manga_ids
 
     def authenticate(self) -> bool:
@@ -191,6 +190,7 @@ class MangaDexSync:
     def sync_manga_list(self, anilist_username: str):
         print(Fore.YELLOW + "Fetching your current MangaDex list...")
         current_mangadex_ids = self.get_current_mangadex_list()
+        initial_count = len(current_mangadex_ids)
         
         print(Fore.YELLOW + "Fetching your AniList manga...")
         anilist_manga = self.get_anilist_manga_list(anilist_username)
@@ -199,9 +199,12 @@ class MangaDexSync:
             return
     
         total_manga = len(anilist_manga)
-        synced_manga = [0]
+        new_additions = [0]
+        resynced = [0]
         skipped_manga = [0]
         failed_manga = []
+        newly_added_titles = set()
+        resynced_titles = set()
     
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
@@ -211,38 +214,66 @@ class MangaDexSync:
                 primary_title = titles.get('english') or titles.get('romaji') or titles.get('native')
                 print(Fore.YELLOW + f"Processing manga {index}/{total_manga}: {primary_title}")
     
-                futures.append(executor.submit(self.process_manga, manga, primary_title, current_mangadex_ids, failed_manga, synced_manga, skipped_manga))
+                future = executor.submit(
+                    self.process_manga, 
+                    manga, 
+                    primary_title, 
+                    current_mangadex_ids, 
+                    failed_manga, 
+                    new_additions,
+                    resynced,
+                    skipped_manga,
+                    newly_added_titles,
+                    resynced_titles
+                )
+                futures.append(future)
     
             for future in concurrent.futures.as_completed(futures):
                 future.result()
     
         failed_count = len(failed_manga)
-        print(Fore.YELLOW + f"\n--- Synchronization complete ---")
-        print(Fore.GREEN + f"Successfully synced: {synced_manga[0]}/{total_manga}")
+        print(Fore.YELLOW + f"\n--- Synchronization Summary ---")
+        print(Fore.BLUE + f"Initial MangaDex list size: {initial_count}")
+        print(Fore.GREEN + f"New entries added: {new_additions[0]}")
+        if newly_added_titles:
+            print(Fore.GREEN + "Newly added manga:")
+            for title in sorted(newly_added_titles):
+                print(Fore.GREEN + f"  • {title}")
+        print(Fore.CYAN + f"Existing entries re-synced: {resynced[0]}")
         print(Fore.RED + f"Failed to sync: {failed_count}/{total_manga}")
         print(Fore.CYAN + f"Skipped manga: {skipped_manga[0]}/{total_manga}")
         if failed_count:
-            print(Fore.RED + f"Failed manga: {', '.join(failed_manga)}")
+            print(Fore.RED + "Failed manga:")
+            for title in failed_manga:
+                print(Fore.RED + f"  • {title}")
 
-    def process_manga(self, manga: dict, primary_title: str, current_mangadex_ids: Set[str], failed_manga: list, synced_manga: list, skipped_manga: list):
+    def process_manga(self, manga: dict, primary_title: str, current_mangadex_ids: Set[str], 
+                     failed_manga: list, new_additions: list, resynced: list, 
+                     skipped_manga: list, newly_added_titles: set, resynced_titles: set):
         manga_id = manga['media']['id']
         status = manga['status']
-        progress = manga['progress']
-    
-        if manga_id in current_mangadex_ids:
-            print(Fore.CYAN + f"{primary_title} is already synced, skipping.")
-            skipped_manga[0] += 1
-        else:
-            print(Fore.GREEN + f"Syncing {primary_title}...")
-            mangadex_id = self.find_mangadex_manga(manga['media']['title'])
-            if mangadex_id:
-                print(Fore.GREEN + f"Found MangaDex ID for {primary_title}: {mangadex_id}")
-                if self.update_mangadex_reading_status(mangadex_id, status):
-                    synced_manga[0] += 1
-                else:
-                    failed_manga.append(primary_title)
+        
+        mangadex_id = self.find_mangadex_manga(manga['media']['title'])
+        
+        if not mangadex_id:
+            print(Fore.RED + f"Could not find MangaDex ID for {primary_title}")
+            failed_manga.append(primary_title)
+            return
+            
+        is_new = mangadex_id not in current_mangadex_ids
+        
+        if self.update_mangadex_reading_status(mangadex_id, status):
+            if is_new:
+                print(Fore.GREEN + f"Added new manga: {primary_title}")
+                new_additions[0] += 1
+                newly_added_titles.add(primary_title)
             else:
-                failed_manga.append(primary_title)
+                print(Fore.CYAN + f"Re-synced existing manga: {primary_title}")
+                resynced[0] += 1
+                resynced_titles.add(primary_title)
+        else:
+            failed_manga.append(primary_title)
+            print(Fore.RED + f"Failed to update status for {primary_title}")
 
 if __name__ == '__main__':
     manga_sync = MangaDexSync()
