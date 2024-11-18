@@ -276,5 +276,10 @@ class MangaDexSync:
             print(Fore.RED + f"Failed to update status for {primary_title}")
 
 if __name__ == '__main__':
+    anilist_username = os.getenv('ANILIST_USERNAME')
+    if not anilist_username:
+        print(Fore.RED + "Error: ANILIST_USERNAME environment variable not set")
+        sys.exit(1)
+    
     manga_sync = MangaDexSync()
-    manga_sync.sync_manga_list(anilist_username="itsmechinmoy")
+    manga_sync.sync_manga_list(anilist_username)
